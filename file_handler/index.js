@@ -29,8 +29,39 @@ app.post('/sync', async (req, res) => {
         }
     }
 
+    // After sync completes, optionally prewarm the app via query params
+    // Usage: /sync?prewarm=true&prewarmPaths=/,/api/hello&port=3000&wait=false
+    const qp = req.query || {};
+    const str = (v) => (v === undefined || v === null ? '' : String(v));
+    const toBool = (v, defaultVal = false) => {
+      const s = str(v).toLowerCase();
+      if (s === '') return defaultVal;
+      return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+    };
+    const prewarmRequested = toBool(qp.prewarm, false);
+    const waitForResponse = toBool(qp.wait, false); // if true, wait for prewarm to finish before responding
+    const targetPort = Number(qp.port) || APP_PORT_DEFAULT;
+    const parsePaths = (input) => {
+      if (Array.isArray(input)) return input;
+      const s = str(input).trim();
+      if (!s) return PREWARM_DEFAULT_PATHS;
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {}
+      if (s.includes(',')) return s.split(',').map((p) => p.trim()).filter(Boolean);
+      return [s];
+    };
+    const paths = parsePaths(qp.prewarmPaths ?? qp.paths);
+
     try {
         await Promise.all(promises);
+        if (prewarmRequested) {
+          const job = prewarmPaths(paths, targetPort, true).catch(() => {});
+          if (waitForResponse) {
+            await job;
+          }
+        }
         res.status(200).send('Files synced successfully.');
     } catch (error) {
         console.error('Error syncing files:', error);
