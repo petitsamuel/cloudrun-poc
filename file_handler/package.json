@@ -1,0 +1,17 @@
+{
+  "name": "file_handler",
+  "version": "1.0.0",
+  "description": "``` POST /sync Content-Type: application/json {     \"path/to/file\": \"base-64-encoded-file\",     \"path/to/file2\": \"base-64-encoded-file2\", } ```",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "express": "^5.1.0"
+  }
+}

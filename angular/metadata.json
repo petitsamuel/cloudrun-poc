@@ -1,0 +1,5 @@
+{
+  "name": "Hello World App",
+  "description": "A simple and beautiful 'Hello World' application built with Angular and styled with Tailwind CSS.",
+  "requestFramePermissions": []
+}
