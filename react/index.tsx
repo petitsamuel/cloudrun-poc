@@ -10,7 +10,7 @@ function App() {
 
   useEffect(() => {
     const generateGreeting = async () => {
-      setMessage('Hello, world!');
+      setMessage('Hello, world 2!');
     };
 
     generateGreeting();

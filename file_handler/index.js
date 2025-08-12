@@ -11,6 +11,30 @@ const port = process.env.PORT || 8000;
 
 app.use(bodyParser.json({ limit: '50mb' }));
 
+// Basic CORS support (configurable via CORS_ORIGINS env: comma-separated list or '*')
+const CORS_ORIGINS = '*';
+function isOriginAllowed(origin) {
+  if (!origin) return true; // allow non-CORS requests
+  if (CORS_ORIGINS === '*') return true;
+  const allowed = CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean);
+  return allowed.includes(origin);
+}
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (isOriginAllowed(origin)) {
+    res.header('Access-Control-Allow-Origin', CORS_ORIGINS === '*' ? '*' : origin || '*');
+    res.header('Vary', 'Origin');
+  }
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  // We do not use cookies; disallow credentials with wildcard origin
+  res.header('Access-Control-Allow-Credentials', 'false');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 app.post('/sync', async (req, res) => {
     const files = req.body;
     const promises = [];
@@ -171,10 +195,34 @@ function readPackageJson(cwd) {
 function resolveDevCommand(cwd, port) {
   const pkg = readPackageJson(cwd) || {};
   const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  // Dedicated handling for popular dev servers so we can force host/port
+  // Next.js
   if (deps.next) {
     return ['node', ['node_modules/next/dist/bin/next', 'dev', '-H', '0.0.0.0', '-p', String(port)]];
   }
   const scripts = pkg.scripts || {};
+  const devScript = String(scripts.dev || '');
+  const hasAngularWorkspace = fsSync.existsSync(path.join(cwd, 'angular.json'));
+  const hasViteConfig = [
+    'vite.config.ts',
+    'vite.config.js',
+    'vite.config.mjs',
+    'vite.config.cjs',
+  ].some((f) => fsSync.existsSync(path.join(cwd, f)));
+  const usesVite = hasViteConfig || Boolean(deps.vite) || /(^|\s)vite(\s|$)/.test(devScript);
+  const usesAngularCli = hasAngularWorkspace && (Boolean(deps['@angular/cli'] || deps['@angular/build']) || /ng\s+serve/.test(devScript));
+
+  // Angular CLI
+  if (usesAngularCli) {
+    return ['node', ['node_modules/@angular/cli/bin/ng.js', 'serve', '--host', '0.0.0.0', '--port', String(port)]];
+  }
+
+  // Vite
+  if (usesVite) {
+    return ['node', ['node_modules/vite/bin/vite.js', '--host', '0.0.0.0', '--port', String(port)]];
+  }
+
+  // Fallback: rely on package scripts; PORT/HOST are still exported via env
   const npmArgs = scripts.dev ? ['run', 'dev'] : ['start'];
   return ['npm', npmArgs];
 }

@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends nginx curl \
 WORKDIR /app
 
 # Choose which sample app source to use. Options: next (Next.js), react, angular
-ARG APP_SOURCE=next
+ARG APP_SOURCE=react
 
 # Copy package.json and package-lock.json for file_handler and install dependencies
 COPY file_handler/package*.json ./file_handler/
