@@ -45,3 +45,16 @@ cat <<EOF >> package.json
 }
 EOF
 ```
+
+
+
+-----
+
+
+Deploy to registry flow
+
+```
+docker build -t cloud-run-hot-reload:dev .
+docker tag cloud-run-hot-reload:dev us-west1-docker.pkg.dev/cloudrun-ui-dev-xd/cloud-run-applet-dev/applet-server-image:dev
+docker push us-west1-docker.pkg.dev/cloudrun-ui-dev-xd/cloud-run-applet-dev/applet-server-image:dev
+```
