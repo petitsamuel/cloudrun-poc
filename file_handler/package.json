@@ -1,13 +1,13 @@
 {
   "name": "file_handler",
   "version": "1.0.0",
-  "description": "``` POST /sync Content-Type: application/json {     \"path/to/file\": \"base-64-encoded-file\",     \"path/to/file2\": \"base-64-encoded-file2\", } ```",
+  "description": "AppletContainerControlPlaneService - Service for managing developer application environment with file sync, dependency management, and dev server control",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node index.js"
   },
-  "keywords": [],
+  "keywords": ["applet", "container", "control-plane", "dev-server"],
   "author": "",
   "license": "ISC",
   "dependencies": {

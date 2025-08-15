@@ -34,57 +34,30 @@ wait_for_http() {
     echo "$url is ready."
 }
 
-# Ensure dependencies are present before starting the dev server
-ensure_deps_installed() {
-    if [ ! -d node_modules ]; then
-        echo "node_modules missing. Installing dependencies..."
-        if [ -f package-lock.json ]; then npm ci; else npm install; fi
-        return
-    fi
-
-    # Detect the dev script and check for a corresponding CLI in node_modules/.bin
-    local dev_script
-    dev_script=$(node -e 'try{const p=require("./package.json"); console.log((p.scripts&&p.scripts.dev)||"");}catch(e){console.log("");}')
-    local required_bin=""
-    if echo "$dev_script" | grep -qE "\\bvite\\b"; then required_bin="vite"; fi
-    if echo "$dev_script" | grep -qE "\\bnext\\b"; then required_bin="next"; fi
-    if echo "$dev_script" | grep -qE "\\bng\\b"; then required_bin="ng"; fi
-
-    if [ -n "$required_bin" ] && [ ! -x "node_modules/.bin/$required_bin" ]; then
-        echo "Dependency CLI '$required_bin' not found. Installing dependencies..."
-        if [ -f package-lock.json ]; then npm ci; else npm install; fi
-    fi
-}
-
 # Start the file_handler API in the background.
 echo "Starting file_handler service..."
 cd /app/file_handler
 PORT=8000 npm start &
 
-# Wait for the management API to be ready, then let it manage the dev server
+# Wait for the management API to be ready
 wait_for_http "http://localhost:8000/healthz" 120 2 || true
 
-# Ask the management API to start the app dev server (ensures consistent PID management)
-echo "Starting app dev server via management API..."
-curl -fsS -X POST http://localhost:8000/dev/start \
+# Set up initial framework and start dev server
+echo "Setting up initial framework..."
+curl -fsS -X POST http://localhost:8000/dev/setup \
   -H 'Content-Type: application/json' \
-  -d '{"port":3000, "prewarm": true, "prewarmPaths": ["/", "/api/hello"]}' \
-  || true
+  -d '{"framework": "FRAMEWORK_NEXTJS"}' \
+  || echo "Initial setup failed, use /dev/context/reset to configure manually"
+
+# Let the management API handle all framework setup and dev server management
+echo "Management API ready. Use /dev/context/reset to switch frameworks and start dev servers."
+echo "Available frameworks: FRAMEWORK_NEXTJS, FRAMEWORK_VITE, FRAMEWORK_UNSPECIFIED"
 
 # Start nginx immediately so the container is ready on :8080.
 # Nginx will serve a warmup page until backends are reachable.
 echo "Starting nginx..."
 nginx -g 'daemon off;' &
 NGINX_PID=$!
-
-# Prewarm common pages in background to reduce first-request latency
-(
-  sleep 1
-  # TODO: make this a more generic endpoint like /
-  for path in "/api/hello"; do
-    curl -fsS "http://localhost:3000${path}" >/dev/null 2>&1 || true
-  done
-)
 
 # Keep container alive as long as nginx is running.
 wait "$NGINX_PID"
