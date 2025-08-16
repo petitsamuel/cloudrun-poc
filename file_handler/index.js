@@ -73,7 +73,7 @@ app.post('/sync', async (req, res) => {
         if (Array.isArray(input)) return input;
         const s = str(input).trim();
         if (!s) return PREWARM_DEFAULT_PATHS;
-        try { const parsed = JSON.parse(s); if (Array.isArray(parsed)) return parsed; } catch {}
+        try { const parsed = JSON.parse(s); if (Array.isArray(parsed)) return parsed; } catch { }
         if (s.includes(',')) return s.split(',').map((p) => p.trim()).filter(Boolean);
         return [s];
       };
@@ -81,7 +81,7 @@ app.post('/sync', async (req, res) => {
     }
 
     if (prewarmRequested) {
-      const job = prewarmPaths(prewarmPathsInput, prewarmPort, true).catch(() => {});
+      const job = prewarmPaths(prewarmPathsInput, prewarmPort, true).catch(() => { });
       if (prewarmWait) {
         await job;
       }
@@ -131,7 +131,7 @@ function getFrameworkSourceDir(framework) {
   const candidates = ['next', 'react', 'angular'];
   for (const c of candidates) {
     const p = path.resolve('/app', c);
-    try { if (fsSync.existsSync(p) && fsSync.statSync(p).isDirectory()) return c; } catch {}
+    try { if (fsSync.existsSync(p) && fsSync.statSync(p).isDirectory()) return c; } catch { }
   }
   return null;
 }
@@ -160,7 +160,7 @@ function saveContext(ctx) {
   try {
     fsSync.mkdirSync(path.dirname(DEV_CONTEXT_FILE), { recursive: true });
     fsSync.writeFileSync(DEV_CONTEXT_FILE, JSON.stringify(ctx, null, 2));
-  } catch {}
+  } catch { }
 }
 
 let currentContext = loadContext();
@@ -188,7 +188,7 @@ async function deletePath(targetPath) {
   const filePath = resolveWithinAppDir(targetPath);
   try {
     await fs.rm(filePath, { recursive: true, force: true });
-  } catch {}
+  } catch { }
 }
 
 function resolveWithinNodeModules(requestPath) {
@@ -366,7 +366,7 @@ async function waitForServerReady(baseUrl, timeoutMs = 20000) {
     try {
       const res = await fetchWithTimeout(baseUrl, 2000);
       if (res.ok || res.status === 404) return true;
-    } catch {}
+    } catch { }
     await new Promise((r) => setTimeout(r, 250));
   }
   return false;
@@ -379,7 +379,7 @@ async function prewarmPaths(paths, port = APP_PORT_DEFAULT, waitUntilReady = tru
   }
   const unique = Array.from(new Set(paths));
   await Promise.all(unique.map(async (p) => {
-    try { await fetchWithTimeout(`${baseUrl}${p}`, 5000); } catch {}
+    try { await fetchWithTimeout(`${baseUrl}${p}`, 5000); } catch { }
   }));
 }
 
@@ -407,7 +407,7 @@ async function dependenciesInstallHandler(req, res) {
         const paths = Array.isArray(prewarm_config.paths) ? prewarm_config.paths : PREWARM_DEFAULT_PATHS;
         const port = Number(prewarm_config.port || APP_PORT_DEFAULT) || APP_PORT_DEFAULT;
         const wait = Boolean(prewarm_config.wait_for_completion);
-        const job = prewarmPaths(paths, port, true).catch(() => {});
+        const job = prewarmPaths(paths, port, true).catch(() => { });
         if (wait) await job;
       }
       return res.status(200).json({ success: true, exit_code: result.code });
@@ -431,12 +431,12 @@ app.post('/dev/stop', async (_req, res) => {
     return res.status(200).json({ stopped: true, message: 'Dev server not running' });
   }
   // Kill the whole process group to avoid orphan child processes holding the port
-  try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch {} }
+  try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { } }
   const exited = await waitForExit(pid, 10000);
   if (!exited) {
-    try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { } }
   }
-  try { fsSync.unlinkSync(PID_FILE); } catch {}
+  try { fsSync.unlinkSync(PID_FILE); } catch { }
   return res.status(200).json({ stopped: true, message: 'Dev server stopped successfully' });
 });
 
@@ -463,15 +463,15 @@ app.post('/dev/start', async (req, res) => {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     // Put child in its own process group to allow group signals
-    try { process.kill(-child.pid, 0); } catch {}
-    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch {}
+    try { process.kill(-child.pid, 0); } catch { }
+    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch { }
     child.stdout.on('data', (d) => process.stdout.write(d));
     child.stderr.on('data', (d) => process.stderr.write(d));
-    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch {} });
+    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch { } });
     if (prewarm_config) {
       const paths = Array.isArray(prewarm_config.paths) ? prewarm_config.paths : PREWARM_DEFAULT_PATHS;
       const wait = Boolean(prewarm_config.wait_for_completion);
-      const job = prewarmPaths(paths, Number(prewarm_config.port || port) || port, true).catch(() => {});
+      const job = prewarmPaths(paths, Number(prewarm_config.port || port) || port, true).catch(() => { });
       if (wait) await job;
     }
     return res.status(202).json({ operation_initiated: true, pid: child.pid });
@@ -491,12 +491,12 @@ app.post('/dev/restart', async (req, res) => {
     devOpInProgress = true;
     const pid = readPidFile();
     if (pid && isProcessAlive(pid)) {
-      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch {} }
+      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { } }
       await waitForExit(pid, 10000);
       if (isProcessAlive(pid)) {
-        try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch {} }
+        try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { } }
       }
-      try { fsSync.unlinkSync(PID_FILE); } catch {}
+      try { fsSync.unlinkSync(PID_FILE); } catch { }
       await waitForPortToBeFree(port, 5000);
     }
     const [cmd, args] = resolveDevCommand(APP_DIR, port, currentContext.framework);
@@ -506,15 +506,15 @@ app.post('/dev/restart', async (req, res) => {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    try { process.kill(-child.pid, 0); } catch {}
-    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch {}
+    try { process.kill(-child.pid, 0); } catch { }
+    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch { }
     child.stdout.on('data', (d) => process.stdout.write(d));
     child.stderr.on('data', (d) => process.stderr.write(d));
-    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch {} });
+    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch { } });
     if (prewarm_config) {
       const paths = Array.isArray(prewarm_config.paths) ? prewarm_config.paths : PREWARM_DEFAULT_PATHS;
       const wait = Boolean(prewarm_config.wait_for_completion);
-      const job = prewarmPaths(paths, Number(prewarm_config.port || port) || port, true).catch(() => {});
+      const job = prewarmPaths(paths, Number(prewarm_config.port || port) || port, true).catch(() => { });
       if (wait) await job;
     }
     return res.status(202).json({ operation_initiated: true, pid: child.pid });
@@ -586,21 +586,21 @@ async function cleanWorkspace(framework, cwd = APP_DIR) {
 
   await Promise.all(Array.from(targets).map(async (p) => {
     const target = path.resolve(cwd, p);
-    try { await fs.rm(target, { recursive: true, force: true }); } catch {}
+    try { await fs.rm(target, { recursive: true, force: true }); } catch { }
   }));
 }
 
 async function resetDirectoryContents(dirPath) {
   try {
     await fs.rm(dirPath, { recursive: true, force: true });
-  } catch {}
+  } catch { }
   await fs.mkdir(dirPath, { recursive: true });
 }
 
 async function createBasicFrameworkApp(framework, cwd = APP_DIR) {
   try {
     console.log(`Creating basic ${framework} app in ${cwd}`);
-    
+
     if (framework === 'FRAMEWORK_NEXTJS') {
       // Create basic Next.js app
       const packageJson = {
@@ -618,7 +618,7 @@ async function createBasicFrameworkApp(framework, cwd = APP_DIR) {
           "react-dom": "^18.0.0"
         }
       };
-      
+
       const nextConfig = `/** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
@@ -627,7 +627,7 @@ const nextConfig = {
 }
 
 module.exports = nextConfig`;
-      
+
       const pageJs = `export default function Home() {
   return (
     <div>
@@ -636,7 +636,7 @@ module.exports = nextConfig`;
     </div>
   )
 }`;
-      
+
       const layoutJs = `export default function RootLayout({ children }) {
   return (
     <html lang="en">
@@ -644,14 +644,14 @@ module.exports = nextConfig`;
     </html>
   )
 }`;
-      
+
       // Write files
       await fs.writeFile(path.join(cwd, 'package.json'), JSON.stringify(packageJson, null, 2));
       await fs.writeFile(path.join(cwd, 'next.config.js'), nextConfig);
       await fs.mkdir(path.join(cwd, 'app'), { recursive: true });
       await fs.writeFile(path.join(cwd, 'app', 'page.js'), pageJs);
       await fs.writeFile(path.join(cwd, 'app', 'layout.js'), layoutJs);
-      
+
     } else if (framework === 'FRAMEWORK_VITE') {
       // Create basic Vite app
       const packageJson = {
@@ -672,7 +672,7 @@ module.exports = nextConfig`;
           "vite": "^4.0.0"
         }
       };
-      
+
       const viteConfig = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -683,7 +683,7 @@ export default defineConfig({
     port: 3000
   }
 })`;
-      
+
       const indexHtml = `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -696,7 +696,7 @@ export default defineConfig({
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>`;
-      
+
       const mainJsx = `import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
@@ -706,7 +706,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <App />
   </React.StrictMode>,
 )`;
-      
+
       const appJsx = `function App() {
   return (
     <div>
@@ -717,7 +717,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 }
 
 export default App`;
-      
+
       // Write files
       await fs.writeFile(path.join(cwd, 'package.json'), JSON.stringify(packageJson, null, 2));
       await fs.writeFile(path.join(cwd, 'vite.config.js'), viteConfig);
@@ -726,7 +726,7 @@ export default App`;
       await fs.writeFile(path.join(cwd, 'src', 'main.jsx'), mainJsx);
       await fs.writeFile(path.join(cwd, 'src', 'App.jsx'), appJsx);
     }
-    
+
     console.log(`Basic ${framework} app created successfully`);
   } catch (error) {
     console.error(`Error creating basic framework app: ${error}`);
@@ -736,10 +736,10 @@ export default App`;
 
 async function installDependenciesForFramework(framework, cwd = APP_DIR) {
   const desired = frameworkFromInput(framework);
-  
+
   try {
     console.log(`Installing dependencies for ${desired} framework`);
-    
+
     // Check if package.json exists
     const packageJsonPath = path.join(cwd, 'package.json');
     try {
@@ -748,13 +748,13 @@ async function installDependenciesForFramework(framework, cwd = APP_DIR) {
       console.log('No package.json found, skipping dependency installation');
       return;
     }
-    
+
     // Install dependencies
     const result = await runCommand('npm', ['install', '--no-fund', '--no-audit'], { cwd });
     if (result.code !== 0) {
       throw new Error(`npm install failed with code ${result.code}: ${result.stderr}`);
     }
-    
+
     console.log(`Dependencies installed successfully for ${desired}`);
   } catch (error) {
     console.error(`Error installing dependencies: ${error}`);
@@ -769,13 +769,13 @@ app.post('/dev/context/reset', async (req, res) => {
     // Stop server if running with robust termination (TERM then KILL)
     const pid = readPidFile();
     if (pid && isProcessAlive(pid)) {
-      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch {} }
+      try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { } }
       const exited = await waitForExit(pid, 10000);
       if (!exited) {
-        try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch {} }
+        try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { } }
         await waitForExit(pid, 5000);
       }
-      try { fsSync.unlinkSync(PID_FILE); } catch {}
+      try { fsSync.unlinkSync(PID_FILE); } catch { }
     }
 
     // Update context
@@ -784,13 +784,13 @@ app.post('/dev/context/reset', async (req, res) => {
 
     // Ensure port is free before starting a new server
     await waitForPortToBeFree(APP_PORT_DEFAULT, 15000);
-    
+
     // Prepare framework files from hardcoded templates
     await syncFrameworkFiles(currentContext.framework, APP_DIR);
-    
+
     // Install dependencies for the new framework
     await installDependenciesForFramework(currentContext.framework, APP_DIR);
-    
+
     // Start dev server with new context
     const [cmd, args] = resolveDevCommand(APP_DIR, APP_PORT_DEFAULT, currentContext.framework);
     const child = spawn(cmd, args, {
@@ -799,17 +799,17 @@ app.post('/dev/context/reset', async (req, res) => {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    
+
     // Put child in its own process group to allow group signals
-    try { process.kill(-child.pid, 0); } catch {}
-    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch {}
+    try { process.kill(-child.pid, 0); } catch { }
+    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch { }
     child.stdout.on('data', (d) => process.stdout.write(d));
     child.stderr.on('data', (d) => process.stderr.write(d));
-    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch {} });
+    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch { } });
 
-    return res.status(200).json({ 
-      success: true, 
-      pid: child.pid, 
+    return res.status(200).json({
+      success: true,
+      pid: child.pid,
       message: `Context changed to ${currentContext.framework}, files generated, dependencies installed, and dev server started.`,
       framework: currentContext.framework,
       port: APP_PORT_DEFAULT
@@ -820,28 +820,28 @@ app.post('/dev/context/reset', async (req, res) => {
 });
 
 // Lightweight health endpoint used by the startup script
-app.get('/healthz', (_req, res) => {
-    res.status(200).send('ok');
+app.get('/health', (_req, res) => {
+  res.status(200).send('ok');
 });
 
 // Initial setup endpoint for container startup
 app.post('/dev/setup', async (req, res) => {
   try {
     const { framework = 'FRAMEWORK_UNSPECIFIED', environment_variables = {} } = req.body || {};
-    
+
     // Set initial context
     currentContext = { framework: frameworkFromInput(framework), environment_variables: environment_variables && typeof environment_variables === 'object' ? environment_variables : {} };
     saveContext(currentContext);
-    
+
     // Clean any existing artifacts
     await cleanWorkspace(currentContext.framework, APP_DIR);
-    
+
     // Sync framework files
     await syncFrameworkFiles(currentContext.framework, APP_DIR);
-    
+
     // Install dependencies
     await installDependenciesForFramework(currentContext.framework, APP_DIR);
-    
+
     // Start dev server
     const [cmd, args] = resolveDevCommand(APP_DIR, APP_PORT_DEFAULT, currentContext.framework);
     const child = spawn(cmd, args, {
@@ -850,14 +850,14 @@ app.post('/dev/setup', async (req, res) => {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    
+
     // Put child in its own process group to allow group signals
-    try { process.kill(-child.pid, 0); } catch {}
-    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch {}
+    try { process.kill(-child.pid, 0); } catch { }
+    try { fsSync.writeFileSync(PID_FILE, String(child.pid)); } catch { }
     child.stdout.on('data', (d) => process.stdout.write(d));
     child.stderr.on('data', (d) => process.stderr.write(d));
-    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch {} });
-    
+    child.on('exit', () => { try { fsSync.unlinkSync(PID_FILE); } catch { } });
+
     return res.status(200).json({
       success: true,
       pid: child.pid,
@@ -881,5 +881,5 @@ app.get('/health', (_req, res) => {
 });
 
 app.listen(port, () => {
-    console.log(`Server listening at http://localhost:${port}`);
+  console.log(`Server listening at http://localhost:${port}`);
 });

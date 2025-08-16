@@ -21,6 +21,7 @@ export default function Home() {
   return (
     <main>
       <h1>API Response:</h1>
+      <h2>sam 3</h2>
       <pre>{JSON.stringify(data, null, 2)}</pre>
     </main>
   );
