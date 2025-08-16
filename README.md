@@ -1,6 +1,5 @@
 ## Architecture
 
-TODO: replace this
 ```mermaid
 graph TD
     subgraph "User's Browser/CLI"
@@ -13,15 +12,20 @@ graph TD
         subgraph "Backend Services (Internal)"
             C[file_handler on :8000]
             D[applet on :3000]
-            C -- Updates Source for Hot Reload--> D
+            C -- Updates files, packages, manages process--> D
         end
     end
 
     A -- "HTTP Request on :8080" --> B
-    B -- "Proxies /sync requests" --> C
-    B -- "Proxies /npm/* and /dev/* mgmt" --> C
+    B -- "Proxies /__aistudio_internal_control_plane/*" --> C
     B -- "Proxies all other requests" --> D
+
 ```
+
+## TODO
+
+- Add IAM authentication
+- CORS for AIS only
 
 ## Deploy The app
 
@@ -135,6 +139,22 @@ curl -X POST http://localhost:8080/__aistudio_internal_control_plane/sync \
 }'
 ```
 **Expected Output:** A success message. You can verify the file at `/app/applet/src/index.js` is now gone.
+
+
+Automatic npm installs & pruning unused packages:
+
+```bash
+❯ curl -X POST http://localhost:8080/__aistudio_internal_control_plane/sync \                                                                                                5s 18:12:49
+  -H "Content-Type: application/json" \
+  -d "{
+    \"files\": {
+        \"package.json\": \"$(cat next/package.json | base64)\"
+    },
+    \"deleted_file_paths\": []
+}"
+```
+
+TIP: make a change to `package.json` first!
 
 ---
 

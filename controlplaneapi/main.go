@@ -236,6 +236,51 @@ type SyncRequest struct {
 	DeletedFilePaths []string          `json:"deleted_file_paths"`
 }
 
+// runCommandAndStreamOutput executes a command and streams its output to the log broadcaster.
+func runCommandAndStreamOutput(command string, args []string) error {
+	cmd := exec.Command(command, args...)
+	cmd.Dir = appDir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdout pipe for %s: %w", command, err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe for %s: %w", command, err)
+	}
+
+	log.Printf("Running: %s %s in %s", command, strings.Join(args, " "), appDir)
+	logBroadcaster.Submit(fmt.Sprintf("--- Running: %s %s ---", command, strings.Join(args, " ")))
+
+	if err := cmd.Start(); err != nil {
+		logBroadcaster.Submit(fmt.Sprintf("--- Failed to start command: %s ---", command))
+		return fmt.Errorf("failed to start command %s: %w", command, err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		streamPipeToBroadcaster(stdout, "STDOUT")
+	}()
+	go func() {
+		defer wg.Done()
+		streamPipeToBroadcaster(stderr, "STDERR")
+	}()
+
+	wg.Wait() // Wait for pipes to be fully drained to capture all output.
+
+	err = cmd.Wait()
+	if err != nil {
+		logBroadcaster.Submit(fmt.Sprintf("--- Command failed: %s %s (%v) ---", command, strings.Join(args, " "), err))
+		return err
+	}
+
+	logBroadcaster.Submit(fmt.Sprintf("--- Command finished successfully: %s %s ---", command, strings.Join(args, " ")))
+	return nil
+}
+
 func syncHandler(w http.ResponseWriter, r *http.Request) {
 	var req SyncRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -243,9 +288,19 @@ func syncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if package.json is being modified before applying changes.
+	packageJsonModified := false
+	for p := range req.Files {
+		if filepath.Clean(p) == "package.json" {
+			packageJsonModified = true
+			break
+		}
+	}
+
 	var wg sync.WaitGroup
 	errs := make(chan error, len(req.Files)+len(req.DeletedFilePaths))
 
+	// Apply file changes concurrently.
 	for p, b64 := range req.Files {
 		wg.Add(1)
 		go func(p, b64 string) {
@@ -274,12 +329,49 @@ func syncHandler(w http.ResponseWriter, r *http.Request) {
 		allErrors = append(allErrors, err.Error())
 	}
 
+	// If file operations failed, stop here.
 	if len(allErrors) > 0 {
 		httpError(w, strings.Join(allErrors, "; "), http.StatusInternalServerError)
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]interface{}{"success": true, "message": "Files synced successfully"})
+	// If package.json was changed, run npm install and prune.
+	var depMessages []string
+	if packageJsonModified {
+		log.Println("package.json modified, running dependency reconciliation.")
+		logBroadcaster.Submit("--- package.json updated. Reconciling dependencies... ---")
+
+		// Install dependencies.
+		installArgs := []string{"install", "--no-fund", "--prefer-offline", "--no-optional", "--no-audit"}
+		if err := runCommandAndStreamOutput("npm", installArgs); err != nil {
+			msg := fmt.Sprintf("npm install failed: %v", err)
+			log.Println(msg)
+			allErrors = append(allErrors, msg)
+		} else {
+			depMessages = append(depMessages, "npm install completed successfully.")
+			// Prune unused dependencies after install.
+			pruneArgs := []string{"prune"}
+			if err := runCommandAndStreamOutput("npm", pruneArgs); err != nil {
+				msg := fmt.Sprintf("npm prune failed: %v", err)
+				log.Println(msg)
+				allErrors = append(allErrors, msg)
+			} else {
+				depMessages = append(depMessages, "npm prune completed successfully.")
+			}
+		}
+		logBroadcaster.Submit("--- Dependency reconciliation finished. ---")
+	}
+
+	if len(allErrors) > 0 {
+		httpError(w, strings.Join(allErrors, "; "), http.StatusInternalServerError)
+		return
+	}
+
+	finalMessage := "Files synced successfully"
+	if len(depMessages) > 0 {
+		finalMessage = fmt.Sprintf("%s. %s", finalMessage, strings.Join(depMessages, " "))
+	}
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"success": true, "message": finalMessage})
 }
 
 type InstallRequest struct {
@@ -662,7 +754,7 @@ func resolveDevCommand(cwd string, port int) (string, []string, error) {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// TODO: make this more secure
+		// TODO: samuelpetit - only allow AI Studio origins when in prod.
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -742,7 +834,3 @@ func isProcessAlive(pid int) bool {
 	// On Unix, sending signal 0 to a process checks if it exists without killing it.
 	return proc.Signal(syscall.Signal(0)) == nil
 }
-
-// TODO:
-
-// add authentication support with cloud run service account
