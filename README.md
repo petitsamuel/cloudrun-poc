@@ -19,7 +19,6 @@ graph TD
     A -- "HTTP Request on :8080" --> B
     B -- "Proxies /__aistudio_internal_control_plane/*" --> C
     B -- "Proxies all other requests" --> D
-
 ```
 
 ## TODO
@@ -269,4 +268,39 @@ curl -X POST http://localhost:8080/__aistudio_internal_control_plane/dev/restart
 Similar to `/dev/start`, it returns a `202 Accepted` with the new PID. Check the logs to see the "restarting" and "started" messages.
 ```json
 {"operation_initiated":true,"pid":54321}
+```
+
+### 8. FileSystem API
+
+#### Listing files
+
+To list files in a directory:
+
+```bash
+curl http://localhost:8080/__aistudio_internal_control_plane/fs/list?path=app
+curl http://localhost:8080/__aistudio_internal_control_plane/fs/list?path=node_modules
+```
+
+Recursively:
+
+```bash
+curl http://localhost:8080/__aistudio_internal_control_plane/fs/list?path=app&recursive=true
+
+[{"relative_path":"api","type":"directory"},{"relative_path":"api/hello","type":"directory"},{"relative_path":"api/hello/route.js","type":"file"},{"relative_path":"layout.js","type":"file"},{"relative_path":"page.js","type":"file"}]
+```
+
+#### Reading files
+
+To read file contents
+
+```bash
+curl http://localhost:8080/__aistudio_internal_control_plane/fs/read?path=app/api/hello/route.js
+
+import { NextResponse } from 'next/server';
+
+export async function GET(request) {
+  const { searchParams } = new URL(request.url);
+  const name = searchParams.get('name');
+  return NextResponse.json({ greeting: `Hello ${name}` });
+}
 ```

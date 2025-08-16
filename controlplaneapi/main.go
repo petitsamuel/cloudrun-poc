@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -54,6 +55,8 @@ func main() {
 	// Register all HTTP handlers.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sync", syncHandler)
+	mux.HandleFunc("/fs/read", fsReadHandler)
+	mux.HandleFunc("/fs/list", fsListHandler)
 	mux.HandleFunc("/dev/install", dependenciesInstallHandler)
 	mux.HandleFunc("/dev/status", statusHandler)
 	mux.HandleFunc("/dev/start", startHandler)
@@ -372,6 +375,105 @@ func syncHandler(w http.ResponseWriter, r *http.Request) {
 		finalMessage = fmt.Sprintf("%s. %s", finalMessage, strings.Join(depMessages, " "))
 	}
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"success": true, "message": finalMessage})
+}
+
+func fsReadHandler(w http.ResponseWriter, r *http.Request) {
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		http.Error(w, "Query parameter 'path' is required", http.StatusBadRequest)
+		return
+	}
+
+	resolvedPath, err := resolveWithinAppDir(filePath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "File not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Failed to access path", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if info.IsDir() {
+		http.Error(w, "Path is a directory, not a file", http.StatusBadRequest)
+		return
+	}
+
+	http.ServeFile(w, r, resolvedPath)
+}
+
+type FsEntry struct {
+	RelativePath string `json:"relative_path"`
+	Type         string `json:"type"` // "file" or "directory"
+}
+
+func fsListHandler(w http.ResponseWriter, r *http.Request) {
+	dirPath := r.URL.Query().Get("path")
+	if dirPath == "" {
+		dirPath = "."
+	}
+
+	recursiveParam := r.URL.Query().Get("recursive")
+	isRecursive, _ := strconv.ParseBool(recursiveParam)
+
+	resolvedPath, err := resolveWithinAppDir(dirPath)
+	if err != nil {
+		httpError(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
+	var fsEntries []FsEntry
+
+	if isRecursive {
+		err := filepath.WalkDir(resolvedPath, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if path == resolvedPath {
+				return nil
+			}
+
+			relativePath, err := filepath.Rel(resolvedPath, path)
+			if err != nil {
+				return err
+			}
+
+			entryType := "file"
+			if d.IsDir() {
+				entryType = "directory"
+			}
+			fsEntries = append(fsEntries, FsEntry{RelativePath: relativePath, Type: entryType})
+			return nil
+		})
+
+		if err != nil {
+			httpError(w, fmt.Sprintf("Failed during recursive directory scan: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+	} else {
+		entries, err := os.ReadDir(resolvedPath)
+		if err != nil {
+			httpError(w, fmt.Sprintf("Could not read directory: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		for _, entry := range entries {
+			entryType := "file"
+			if entry.IsDir() {
+				entryType = "directory"
+			}
+			fsEntries = append(fsEntries, FsEntry{RelativePath: entry.Name(), Type: entryType})
+		}
+	}
+
+	jsonResponse(w, http.StatusOK, fsEntries)
 }
 
 type InstallRequest struct {
