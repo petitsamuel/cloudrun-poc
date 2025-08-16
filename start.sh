@@ -85,9 +85,7 @@ wait_for_http "http://localhost:${CONTROL_PLANE_PORT}/health" 120 2 || { echo "C
 # 3. Request that the control plane start the Node.js dev server.
 echo "Requesting app dev server start from Control Plane API..."
 curl -fsS --fail -X POST http://localhost:${CONTROL_PLANE_PORT}/dev/start \
-  -H 'Content-Type: application/json' \
-  -d '{"port": '${DEFAULT_APP_PORT}'}' \
-  || { echo "Failed to start app dev server via control plane. Check logs."; }
+  -H 'Content-Type: application/json' || { echo "Failed to start app dev server via control plane. Check logs."; }
 
 # 4. Process the nginx config template.
 envsubst '${NGINX_PORT} ${CONTROL_PLANE_PORT} ${DEFAULT_APP_PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf

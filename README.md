@@ -41,6 +41,8 @@ docker build --build-arg APP_SOURCE=next -t dev-env:latest .
 docker run -p 8080:8080 dev-env:latest
 ```
 
+APP_SOURCE can be one of: `angular`, `next`, or `react`.
+
 Using the build script:
 
 ```bash

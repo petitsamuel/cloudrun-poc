@@ -826,32 +826,58 @@ func readPackageJSON(dir string) (*PackageJSON, error) {
 	return &pkg, nil
 }
 
-func resolveDevCommand(cwd string, port int) (string, []string, error) {
-	pkg, err := readPackageJSON(cwd)
+// fileExists returns true if the given path exists and is a file.
+func fileExists(p string) bool {
+	info, err := os.Stat(p)
 	if err != nil {
-		return "", nil, fmt.Errorf("cannot read package.json: %w", err)
+		return false
+	}
+	return !info.IsDir()
+}
+
+func resolveDevCommand(cwd string, port int) (string, []string, error) {
+	// Prefer framework based on presence of config files in cwd.
+	nextConfigs := []string{
+		"next.config.js",
+		"next.config.mjs",
+		"next.config.cjs",
+		"next.config.ts",
+	}
+	for _, f := range nextConfigs {
+		if fileExists(filepath.Join(cwd, f)) {
+			return "node", []string{"node_modules/next/dist/bin/next", "dev", "-p", strconv.Itoa(port)}, nil
+		}
 	}
 
-	// Prefer package.json scripts.
-	if _, ok := pkg.Scripts["dev"]; ok {
-		return "npm", []string{"run", "dev"}, nil
+	viteConfigs := []string{
+		"vite.config.ts",
+		"vite.config.js",
+		"vite.config.mjs",
+		"vite.config.cjs",
+		"vite.config.mts",
+		"vite.config.cts",
 	}
-	if _, ok := pkg.Scripts["start"]; ok {
-		return "npm", []string{"start"}, nil
+	for _, f := range viteConfigs {
+		if fileExists(filepath.Join(cwd, f)) {
+			return "node", []string{"node_modules/vite/bin/vite.js", "--port", strconv.Itoa(port)}, nil
+		}
 	}
 
-	// Fallback to framework-specific commands.
-	if _, ok := pkg.Dependencies["next"]; ok {
-		return "node", []string{"node_modules/next/dist/bin/next", "dev", "-p", strconv.Itoa(port)}, nil
-	}
-	if _, ok := pkg.Dependencies["vite"]; ok {
-		return "node", []string{"node_modules/vite/bin/vite.js", "--port", strconv.Itoa(port)}, nil
-	}
-	if _, ok := pkg.Dependencies["@angular/cli"]; ok {
+	if fileExists(filepath.Join(cwd, "angular.json")) {
 		return "npx", []string{"ng", "serve", "--port", strconv.Itoa(port)}, nil
 	}
 
-	return "", nil, fmt.Errorf("no suitable dev command found in package.json (checked for 'next'/'vite' deps and 'dev'/'start' scripts)")
+	// Fallback to package.json scripts.
+	if pkg, err := readPackageJSON(cwd); err == nil {
+		if _, ok := pkg.Scripts["dev"]; ok {
+			return "npm", []string{"run", "dev"}, nil
+		}
+		if _, ok := pkg.Scripts["start"]; ok {
+			return "npm", []string{"start"}, nil
+		}
+	}
+
+	return "", nil, fmt.Errorf("no suitable dev command found. Looked for config files (next.config.{js,mjs,cjs,ts}, vite.config.{ts,js,mjs,cjs,mts,cts}, angular.json) or 'dev'/'start' scripts in package.json")
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
