@@ -38,12 +38,12 @@ Running the container manually:
 
 ```bash
 docker build --build-arg APP_SOURCE=next -t dev-env:latest .
-docker run --name applet-dev -p 8080:8080 dev-env:latest
+docker run -p 8080:8080 dev-env:latest
 ```
 
 Using the build script:
 
-```
+```bash
 # Build uses the arguments from .dockerenv
 ./build
 docker run -p 8080:8080 dev-env:latest
@@ -59,14 +59,19 @@ Everything else is proxied to the Applet server.
 
 Get to the container files
 
+```bash
+# Find your container id
+docker container ps
 ```
-docker exec -it applet-dev /bin/bash
+
+```bash
+docker exec -it <container_id> /bin/bash
 ```
 
 Stream container logs:
 
-```
-docker logs applet-dev -f
+```bash
+docker logs <container_id> -f
 ```
 
 
