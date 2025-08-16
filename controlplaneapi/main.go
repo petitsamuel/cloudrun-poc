@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,8 +171,6 @@ func (b *Broadcaster) SubmitStderr(msg string) {
 	b.messages <- BroadcastMessage{Text: msg, IsStderr: true}
 }
 
-// --- HTTP Handlers ---
-
 func logsHandler(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -189,19 +188,44 @@ func logsHandler(w http.ResponseWriter, r *http.Request) {
 		logBroadcaster.unregister <- clientChan
 	}()
 
-	// Send an initial connected message.
-	fmt.Fprintf(w, "data: Connected to log stream.\n\n")
-	flusher.Flush()
+	type logEntry struct {
+		Log           string `json:"log"`
+		Error         bool   `json:"error"`
+		SystemMessage string `json:"system_message"`
+	}
+
+	errorRegex := regexp.MustCompile(`(?i)error|exception|failed|unhandled`)
+
+	initialEntry := logEntry{SystemMessage: "CONNECTED"}
+	initialData, err := json.Marshal(initialEntry)
+	if err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", initialData)
+		flusher.Flush()
+	}
 
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
-			// Client has disconnected.
+			closedEntry := logEntry{SystemMessage: "DISCONNECTED"}
+			jsonData, err := json.Marshal(closedEntry)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			flusher.Flush()
 			return
 		case msg := <-clientChan:
-			// Format message as a Server-Sent Event.
-			fmt.Fprintf(w, "data: %s\n\n", msg)
+			isError := errorRegex.MatchString(msg)
+			entry := logEntry{
+				Log:   msg,
+				Error: isError,
+			}
+			jsonData, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
 			flusher.Flush()
 		}
 	}
@@ -271,7 +295,7 @@ func dependenciesInstallHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	args := append([]string{"install", "--no-fund", "--no-audit"}, req.ExtraArgs...)
+	args := append([]string{"install", "--no-fund", "--prefer-offline", "--no-optional", "--no-audit"}, req.ExtraArgs...)
 	cmd := exec.Command("npm", args...)
 	cmd.Dir = appDir
 
@@ -304,10 +328,6 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]interface{}{"running": true, "pid": pid})
 }
 
-type StartRequest struct {
-	Port int `json:"port"`
-}
-
 func startHandler(w http.ResponseWriter, r *http.Request) {
 	handleDevOperation(w, r, "start")
 }
@@ -327,68 +347,172 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// --- Core Logic ---
+type DevOpRequest struct {
+	Prewarm *PrewarmConfig `json:"prewarm,omitempty"`
+}
+
+type PrewarmConfig struct {
+	Paths             []string `json:"paths"`
+	WaitForCompletion bool     `json:"wait_for_completion"`
+}
+
+type DevOpResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	// Included only for start/restart operations
+	PID         int  `json:"pid,omitempty"`
+	ForceKilled bool `json:"force_killed,omitempty"`
+}
+
+func sendJSONResponse(w http.ResponseWriter, statusCode int, payload DevOpResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("Error encoding JSON response: %v", err)
+	}
+}
+
+// performPrewarming sends GET requests to a list of paths to warm up the dev server.
+func performPrewarming(config PrewarmConfig, port int) {
+	log.Printf("Starting pre-warming for %d paths...", len(config.Paths))
+
+	// Wait for the dev server to accept connections before prewarming.
+	// Treat either 2xx or 404 responses as "ready" (mirrors Node helper).
+	if !waitForServerReady(port, 20*time.Second) {
+		log.Printf("Dev server on port %d did not become ready within timeout; proceeding anyway", port)
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second, // Timeout for each pre-warm request.
+	}
+	var wg sync.WaitGroup
+
+	for _, path := range config.Paths {
+		if !strings.HasPrefix(path, "/") {
+			log.Printf("Skipping invalid pre-warm path: %s", path)
+			continue
+		}
+
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+			url := fmt.Sprintf("http://localhost:%d%s", port, p)
+			log.Printf("Pre-warming path: %s", url)
+			resp, err := client.Get(url)
+			if err != nil {
+				log.Printf("Pre-warm request to %s failed: %v", url, err)
+				return
+			}
+			defer resp.Body.Close()
+			_, _ = io.Copy(io.Discard, resp.Body)
+			log.Printf("Pre-warmed %s - Status: %s", url, resp.Status)
+		}(path)
+	}
+
+	wg.Wait()
+	log.Println("Pre-warming completed.")
+}
+
+// waitForServerReady polls the base URL until it responds (2xx or 404) or times out.
+func waitForServerReady(port int, timeout time.Duration) bool {
+	baseURL := fmt.Sprintf("http://localhost:%d", port)
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(baseURL)
+		if err == nil {
+			status := resp.StatusCode
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if (status >= 200 && status < 300) || status == http.StatusNotFound {
+				return true
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
+}
 
 func handleDevOperation(w http.ResponseWriter, r *http.Request, operation string) {
-	var req StartRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpError(w, "Invalid request body", http.StatusBadRequest)
-			return
-		}
-	}
-
-	if req.Port == 0 {
-		req.Port = defaultAppPort
-	}
-
 	devOpMutex.Lock()
 	defer devOpMutex.Unlock()
 
 	pid, err := readPID()
 	isAlive := err == nil && isProcessAlive(pid)
 
+	// Optional request body for pre-warming config.
+	var req DevOpRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			sendJSONResponse(w, http.StatusBadRequest, DevOpResponse{
+				Success: false,
+				Message: fmt.Sprintf("Invalid JSON body: %v", err),
+			})
+			return
+		}
+	}
+
 	switch operation {
 	case "stop":
 		if !isAlive {
-			jsonResponse(w, http.StatusOK, map[string]interface{}{"stopped": true, "message": "Dev server not running"})
+			sendJSONResponse(w, http.StatusOK, DevOpResponse{
+				Success: true,
+				Message: "Dev server not running",
+			})
 			return
 		}
-		if err := stopDevServer(); err != nil {
+		forceKilled, err := stopDevServer()
+		if err != nil {
 			httpError(w, fmt.Sprintf("Failed to stop dev server: %v", err), http.StatusInternalServerError)
 			return
 		}
-		jsonResponse(w, http.StatusOK, map[string]interface{}{"stopped": true, "message": "Dev server stopped successfully"})
+		sendJSONResponse(w, http.StatusOK, DevOpResponse{
+			Success:     true,
+			Message:     "Dev server stopped successfully",
+			ForceKilled: forceKilled,
+		})
 
 	case "start":
 		if isAlive {
 			httpError(w, "Already running", http.StatusConflict)
 			return
 		}
-		newPid, err := startDevServer(req.Port)
+		newPid, err := startDevServer(defaultAppPort, req.Prewarm)
 		if err != nil {
 			httpError(w, fmt.Sprintf("Failed to start dev server: %v", err), http.StatusInternalServerError)
 			return
 		}
-		jsonResponse(w, http.StatusAccepted, map[string]interface{}{"operation_initiated": true, "pid": newPid})
+		sendJSONResponse(w, http.StatusAccepted, DevOpResponse{
+			Success: true,
+			Message: "Dev server started successfully",
+			PID:     newPid,
+		})
 
 	case "restart":
 		logBroadcaster.Submit("--- Server restarting... ---")
+		forceKilled := false
+		var err error
 		if isAlive {
-			if err := stopDevServer(); err != nil {
+			forceKilled, err = stopDevServer()
+			if err != nil {
 				log.Printf("Failed to stop dev server during restart, proceeding anyway: %v", err)
 			}
 		}
-		newPid, err := startDevServer(req.Port)
+		newPid, err := startDevServer(defaultAppPort, req.Prewarm)
 		if err != nil {
 			httpError(w, fmt.Sprintf("Failed to start dev server: %v", err), http.StatusInternalServerError)
 			return
 		}
-		jsonResponse(w, http.StatusAccepted, map[string]interface{}{"operation_initiated": true, "pid": newPid})
+		sendJSONResponse(w, http.StatusAccepted, DevOpResponse{
+			Success:     true,
+			Message:     "Dev server restarted successfully",
+			PID:         newPid,
+			ForceKilled: forceKilled,
+		})
 	}
 }
 
-func startDevServer(port int) (int, error) {
+func startDevServer(port int, prewarm *PrewarmConfig) (int, error) {
 	cmd, args, err := resolveDevCommand(appDir, port)
 	if err != nil {
 		return 0, fmt.Errorf("could not resolve dev command: %w", err)
@@ -419,17 +543,30 @@ func startDevServer(port int) (int, error) {
 
 	log.Printf("Dev server started with PID: %d", proc.Process.Pid)
 	logBroadcaster.Submit(fmt.Sprintf("--- Server started with PID %d on port %d ---", proc.Process.Pid, port))
+
+	if prewarm != nil && len(prewarm.Paths) > 0 {
+		logBroadcaster.Submit(fmt.Sprintf("--- Pre-warming %d paths ---", len(prewarm.Paths)))
+		if prewarm.WaitForCompletion {
+			performPrewarming(*prewarm, port)
+			logBroadcaster.Submit("--- Pre-warming completed ---")
+		} else {
+			go performPrewarming(*prewarm, port)
+			logBroadcaster.Submit("--- Pre-warming running in the background ---")
+		}
+	}
+
 	return proc.Process.Pid, nil
 }
 
-func stopDevServer() error {
+// stopDevServer returns true if the server was force-killed, false if it exited gracefully.
+func stopDevServer() (bool, error) {
 	pid, err := readPID()
 	if err != nil {
-		return nil // Not running or no pid file.
+		return false, nil // Not running or no pid file.
 	}
 	if !isProcessAlive(pid) {
 		os.Remove(pidFile)
-		return nil
+		return false, nil
 	}
 
 	log.Printf("Stopping process group with PGID: %d", pid)
@@ -450,7 +587,7 @@ func stopDevServer() error {
 			time.Sleep(1 * time.Second)         // Give SIGKILL time to work.
 			logBroadcaster.Submit(fmt.Sprintf("--- Server (PID %d) force-killed ---", pid))
 			os.Remove(pidFile)
-			return nil
+			return true, nil
 		default:
 			time.Sleep(150 * time.Millisecond)
 		}
@@ -459,7 +596,7 @@ func stopDevServer() error {
 	log.Printf("Process %d stopped.", pid)
 	logBroadcaster.Submit(fmt.Sprintf("--- Server (PID %d) stopped ---", pid))
 	os.Remove(pidFile)
-	return nil
+	return false, nil
 }
 
 // --- Utility Functions ---
@@ -501,20 +638,23 @@ func resolveDevCommand(cwd string, port int) (string, []string, error) {
 		return "", nil, fmt.Errorf("cannot read package.json: %w", err)
 	}
 
-	// Prefer framework-specific commands for better control
+	// Prefer package.json scripts.
+	if _, ok := pkg.Scripts["dev"]; ok {
+		return "npm", []string{"run", "dev"}, nil
+	}
+	if _, ok := pkg.Scripts["start"]; ok {
+		return "npm", []string{"start"}, nil
+	}
+
+	// Fallback to framework-specific commands.
 	if _, ok := pkg.Dependencies["next"]; ok {
 		return "node", []string{"node_modules/next/dist/bin/next", "dev", "-p", strconv.Itoa(port)}, nil
 	}
 	if _, ok := pkg.Dependencies["vite"]; ok {
 		return "node", []string{"node_modules/vite/bin/vite.js", "--port", strconv.Itoa(port)}, nil
 	}
-
-	// Fallback to standard npm scripts
-	if _, ok := pkg.Scripts["dev"]; ok {
-		return "npm", []string{"run", "dev"}, nil
-	}
-	if _, ok := pkg.Scripts["start"]; ok {
-		return "npm", []string{"start"}, nil
+	if _, ok := pkg.Dependencies["@angular/cli"]; ok {
+		return "npx", []string{"ng", "serve", "--port", strconv.Itoa(port)}, nil
 	}
 
 	return "", nil, fmt.Errorf("no suitable dev command found in package.json (checked for 'next'/'vite' deps and 'dev'/'start' scripts)")
@@ -604,9 +744,5 @@ func isProcessAlive(pid int) bool {
 }
 
 // TODO:
-// make reading logs return if there are compilation errors or not
-// start cannot use a different port
-// add pre-warm logic
-// stop should return if it force stoped or not
-// updating package.json in sync should auto-install (add req param)
+
 // add authentication support with cloud run service account
